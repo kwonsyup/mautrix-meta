@@ -156,10 +156,19 @@ func (c *Client) handleFrame(ctx context.Context, frame []byte) error {
 	} else if tbl, err := prd.Parse(ctx); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to parse table")
 	} else {
-		c.HandleEvent(ctx, tbl)
+		c.HandleEvent(context.WithValue(ctx, frameRequestIDKey{}, prd.RequestID), tbl)
 		c.syncManager.handleLiveSyncResets(ctx, tbl)
 	}
 	return nil
+}
+
+type frameRequestIDKey struct{}
+
+// FrameRequestID is the request_id of the live frame whose table HandleEvent is handling with ctx.
+// ok is false for tables that did not come from a live frame (such as sync replays).
+func FrameRequestID(ctx context.Context) (id int64, ok bool) {
+	id, ok = ctx.Value(frameRequestIDKey{}).(int64)
+	return id, ok
 }
 
 func (c *Client) PostHandlePublishResponse(tbl *table.LSTable) {
@@ -217,7 +226,15 @@ func (c *Client) encodeLSRequest(payload []byte, t int) (json.RawMessage, int64,
 }
 
 func (c *Client) makeLSRequest(ctx context.Context, payload []byte, t int) (*PublishResponseData, error) {
-	jsonPayload, _, err := c.encodeLSRequest(payload, t)
+	return c.makeLSRequestWithID(ctx, payload, t, nil)
+}
+
+// makeLSRequestWithID is makeLSRequest, and stores the request_id it sent in *packetID when that is not nil.
+func (c *Client) makeLSRequestWithID(ctx context.Context, payload []byte, t int, packetID *int64) (*PublishResponseData, error) {
+	jsonPayload, id, err := c.encodeLSRequest(payload, t)
+	if packetID != nil {
+		*packetID = id
+	}
 	if err != nil {
 		return nil, err
 	}
